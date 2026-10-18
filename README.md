@@ -38,6 +38,9 @@ python merge_lora.py --config config.yaml
 # 7. Serve in your vLLM env and evaluate on the held-out subjects
 bash serve.sh                          # or: bash serve.sh fp8 | bash serve.sh lora
 python evaluate.py --config config.yaml
+
+* 8. To start the app
+python app.py --config config.yaml
 ```
 
 For a baseline, run `bash serve.sh lora`, then score both `--model base` and `--model alz-vlm` against the same server.
