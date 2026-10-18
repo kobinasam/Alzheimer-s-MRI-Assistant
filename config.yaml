@@ -1,0 +1,81 @@
+# One config for every stage. Edit paths and model here, nothing else.
+
+# Base model to fine-tune. Must be the unquantized BF16 checkpoint.
+# RedHatAI/* repos are FP8/NVFP4 quantized copies for serving; train on the
+# base model listed under "Model tree" on that repo's page instead.
+model_name: Qwen/Qwen3-VL-8B-Instruct
+
+# Every image is resized to this square size (pixels) in training, merging-time
+# checks and evaluation, so train and serve see identical inputs.
+image_size: 448
+
+data:
+  llava_json: /home/ubuntu/data/alz_instruct.json   # your LLaVA-style JSON
+  image_root: /home/ubuntu/data/images              # folder the "image" field is relative to
+  out_dir: /home/ubuntu/alz-vlm/data                # train.jsonl / val.jsonl / test.jsonl land here
+  val_fraction: 0.10
+  test_fraction: 0.10
+  seed: 42
+  # Grouping key for the split: the regex's first capture group, searched in the
+  # record id, then the image path. For your data that is the ADNI Image Data ID
+  # (I381953), which keeps all questions about one scan in the same split.
+  subject_regex: '(I\d+)'
+  # Better: map image IDs to subjects with an ADNI metadata CSV (the image
+  # collection export, or MRILIST.csv from LONI), so every visit of one
+  # participant stays in one split. Leave subject_csv null to group by scan only.
+  subject_csv: null              # e.g. /home/ubuntu/data/ADNI_collection.csv
+  csv_key_col: Image Data ID     # column holding I381953-style IDs (MRILIST: IMAGEUID)
+  csv_subject_col: Subject       # column holding 002_S_0295-style IDs (MRILIST: PTID)
+  system_prompt: null   # e.g. "You are a neuroradiology assistant."
+
+train:
+  output_dir: /home/ubuntu/alz-vlm/checkpoints/lora
+  qlora: false                  # true = 4-bit base weights (for 24 GB cards)
+  gradient_checkpointing: true
+  lora_r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+  # LoRA on the language model only. The negative lookahead keeps adapters out
+  # of the vision tower, whose MLP layers reuse the same names.
+  target_regex: '^(?!.*(visual|vision)).*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$'
+  # Fully train extra modules alongside LoRA. For Qwen3-VL the projector is
+  # "merger"; add it if your images look very different from natural photos.
+  modules_to_save: []
+  epochs: 3
+  learning_rate: 1.0e-4
+  per_device_batch_size: 4
+  grad_accum: 4
+  warmup_steps: 50
+  weight_decay: 0.0
+  eval_steps: 200
+  max_eval_samples: 1000        # random subset of val used for in-training eval loss
+  save_steps: 200
+  logging_steps: 10
+  max_length: 4096              # samples longer than this are dropped, never truncated
+  num_workers: 4
+  report_to: none               # or wandb / tensorboard
+
+merge:
+  output_dir: /home/ubuntu/alz-vlm/checkpoints/merged
+
+quantize:
+  output_dir: /home/ubuntu/alz-vlm/checkpoints/merged-fp8
+
+serve:
+  served_model_name: alz-vlm
+  port: 8000
+  max_model_len: 8192
+  gpu_memory_utilization: 0.90
+
+eval:
+  base_url: http://localhost:8000/v1
+  split: test                   # which jsonl from data.out_dir to score
+  max_tokens: 512
+  concurrency: 16
+  out_dir: /home/ubuntu/alz-vlm/eval
+  # Diagnostic label extraction from free text, checked in order.
+  # MCI goes first so "mild cognitive impairment due to AD" counts as MCI.
+  label_patterns:
+    MCI: ['\bMCI\b', 'mild cognitive impairment']
+    AD:  ['\bAD\b', 'alzheimer']
+    CN:  ['\bCN\b', 'cognitively normal', 'normal control', 'healthy control']
